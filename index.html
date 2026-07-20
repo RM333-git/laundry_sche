@@ -1,285 +1,363 @@
 <!DOCTYPE html>
 <html lang="ja">
+
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>家族の予定共有</title>
-  <!-- Tailwind CSS (CDN) -->
-  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-  <!-- Supabase JS (CDN) -->
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+	<title>洗濯・夜飯スケジュール</title>
+	<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+	<script src="https://cdn.tailwindcss.com"></script>
+	<style>
+		body {
+			-webkit-tap-highlight-color: transparent;
+		}
+
+		/* 今日のカードの装飾を強化 */
+		.today-highlight {
+			background-color: #eff6ff !important;
+			border-left: 6px solid #2563eb !important;
+			/* ラインを少し太く */
+			border-color: #bfdbfe;
+		}
+	</style>
 </head>
-<body class="bg-slate-50 text-slate-800 min-h-screen p-4 flex flex-col items-center">
 
-  <div class="w-full max-w-md bg-white rounded-2xl shadow-sm p-6 border border-slate-100">
-    <!-- ユーザー表示 -->
-    <div class="flex justify-between items-center border-b border-slate-100 pb-4 mb-6">
-      <h1 class="text-xl font-bold">🧺 家族の予定</h1>
-      <span id="user-badge" class="px-3 py-1 bg-slate-100 text-slate-600 rounded-full text-xs font-semibold">読み込み中...</span>
-    </div>
+<body class="bg-slate-50 text-slate-800 antialiased min-h-screen pb-12">
 
-    <!-- 日付選択（簡易的に今日〜3日後を選べるように） -->
-    <div class="mb-6">
-      <label class="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">日付を選択</label>
-      <select id="date-select" class="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl font-medium focus:outline-none focus:ring-2 focus:ring-blue-500">
-        <!-- JSで動的に日付を入れます -->
-      </select>
-    </div>
+	<!-- ヘッダー -->
+	<header
+		class="bg-white border-b border-slate-200 sticky top-0 z-50 shadow-sm px-4 py-3 flex justify-between items-center">
+		<h1 class="text-lg font-bold text-slate-950 flex items-center gap-2">
+			📅 <span>洗濯・夜飯スケジュール</span>
+		</h1>
+		<span id="user-badge"
+			class="bg-blue-50 text-blue-700 text-xs font-bold px-2.5 py-1 rounded-full border border-blue-200">
+			読み込み中...
+		</span>
+	</header>
 
-    <!-- 洗濯プランカード -->
-    <div class="bg-blue-50/50 border border-blue-100 rounded-2xl p-4 mb-4">
-      <h2 class="font-bold text-blue-900 mb-3 flex items-center gap-2">🧺 洗濯の予定</h2>
-      
-      <div class="space-y-3">
-        <div>
-          <span class="text-xs text-blue-700 font-medium block mb-1">前の予定（第1希望）</span>
-          <div class="grid grid-cols-3 gap-2" id="wash1-buttons">
-            <button onclick="setWash(1, 0)" id="w1-0" class="py-2 rounded-xl bg-white border border-slate-200 text-sm font-medium">なし</button>
-            <button onclick="setWash(1, 1)" id="w1-1" class="py-2 rounded-xl bg-white border border-slate-200 text-sm font-medium">自分</button>
-            <button onclick="setWash(1, 2)" id="w1-2" class="py-2 rounded-xl bg-white border border-slate-200 text-sm font-medium">母</button>
+	<!-- メインコンテンツ -->
+	<main class="max-w-md mx-auto px-2 pt-4">
+		<!-- カレンダーコンテナ -->
+		<div id="calendar-container" class="space-y-6">
+			<!-- ここに JavaScript で3週間分のカレンダーが生成されます -->
+		</div>
+	</main>
+
+	<script>
+		// ==========================================
+		// 1. 初期設定とURLパラメータ取得
+		// ==========================================
+		const urlParams = new URLSearchParams(window.location.search);
+		const currentUserId = parseInt(urlParams.get('id'));
+		const secretKey = urlParams.get('key');
+		const userNames = { 1: 'ryo', 2: 'haha', 3: 'titi' };
+		const userLabels = { 1: '瞭', 2: '母', 3: '父' };
+
+		// ★ ご自身のSupabase情報に書き換えてください！
+		const SUPABASE_URL = 'https://rszzwxwpgrovqsouvuyp.supabase.co';
+		const SUPABASE_KEY = 'sb_publishable_232TIVfWcH_TLDKQCxdFRw_Q4Ja3whI';
+		const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+		let isAuthenticated = false;
+		let datesArray = []; // 21日分の日付データ
+		let laundryStore = {}; // 日付文字列 -> データ
+		let dinnerStore = {};  // 日付文字列 -> { user_id -> not_needed }
+
+		window.addEventListener('DOMContentLoaded', checkUserAndInit);
+
+		// ==========================================
+		// 2. 身内認証 & 3週間の日付生成
+		// ==========================================
+		async function checkUserAndInit() {
+			if (!currentUserId || !secretKey || !userNames[currentUserId]) {
+				accessDenied("URLの引数が正しくありません。");
+				return;
+			}
+
+			const { data: user, error } = await supabaseClient
+				.from('users')
+				.select('name')
+				.eq('id', currentUserId)
+				.eq('secret_key', secretKey)
+				.maybeSingle();
+
+			if (error || !user) {
+				accessDenied("認証に失敗しました。IDまたはキーが間違っています。");
+				return;
+			}
+
+			isAuthenticated = true;
+			document.getElementById('user-badge').innerText = `${userLabels[currentUserId]}ログイン中`;
+
+			generate3WeeksDates();
+			await loadAllData();
+		}
+
+		function accessDenied(message) {
+			alert(message);
+			document.body.innerHTML = `<div class="p-8 text-center text-red-600 font-bold">${message}<br>正しいURLからアクセスし直してください。</div>`;
+		}
+
+		// 先週・今週・来週の合計21日分の日付を計算
+		function generate3WeeksDates() {
+			const today = new Date();
+			const currentDay = today.getDay(); // 0:日, 1:月...
+
+			// 今週の月曜日を基準にする
+			const distanceToMonday = currentDay === 0 ? -6 : 1 - currentDay;
+			const thisMonday = new Date(today);
+			thisMonday.setDate(today.getDate() + distanceToMonday);
+
+			const startPoint = new Date(thisMonday);
+			startPoint.setDate(thisMonday.getDate() - 7);
+
+			const dayNames = ['日', '月', '火', '水', '木', '金', '土'];
+
+			for (let i = 0; i < 21; i++) {
+				const d = new Date(startPoint);
+				d.setDate(startPoint.getDate() + i);
+
+				const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+				const isToday = d.toDateString() === today.toDateString();
+
+				let weekLabel = "今週";
+				if (i < 7) weekLabel = "先週";
+				else if (i >= 14) weekLabel = "来週";
+
+				datesArray.push({
+					dateStr,
+					monthStr: `${d.getMonth() + 1}月`,
+					dayNum: d.getDate(),
+					dayName: dayNames[d.getDay()],
+					isToday,
+					weekLabel
+				});
+			}
+		}
+
+		// ==========================================
+		// 3. データ一括取得 (SELECT)
+		// ==========================================
+		async function loadAllData() {
+			if (!isAuthenticated) return;
+
+			const startId = datesArray[0].dateStr;
+			const endId = datesArray[datesArray.length - 1].dateStr;
+
+			const [laundryRes, dinnerRes] = await Promise.all([
+				supabaseClient.from('laundry_plans').select('*').gte('date', startId).lte('date', endId),
+				supabaseClient.from('dinner_plans').select('*').gte('date', startId).lte('date', endId)
+			]);
+
+			laundryStore = {};
+			if (laundryRes.data) {
+				laundryRes.data.forEach(row => { laundryStore[row.date] = row; });
+			}
+
+			dinnerStore = {};
+			if (dinnerRes.data) {
+				dinnerRes.data.forEach(row => {
+					if (!dinnerStore[row.date]) dinnerStore[row.date] = { 1: 0, 2: 0, 3: 0 };
+					dinnerStore[row.date][row.user_id] = row.not_needed;
+				});
+			}
+
+			renderCalendar();
+
+			setTimeout(() => {
+				const todayEl = document.querySelector('.today-highlight');
+				if (todayEl) todayEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+			}, 300);
+		}
+
+		// ==========================================
+		// 4. カレンダー画面のレンダリング
+		// ==========================================
+		function renderCalendar() {
+			const container = document.getElementById('calendar-container');
+			container.innerHTML = '';
+
+			let currentWeekGroup = '';
+
+			datesArray.forEach(day => {
+				if (currentWeekGroup !== day.weekLabel) {
+					currentWeekGroup = day.weekLabel;
+					const sectionHeader = document.createElement('div');
+					sectionHeader.className = "text-xs font-bold text-slate-400 uppercase tracking-wider pl-2 pt-2 border-t border-slate-200 mt-4 first:mt-0 first:border-0";
+					sectionHeader.innerText = `${day.weekLabel} (${day.monthStr})`;
+					container.appendChild(sectionHeader);
+				}
+
+				const plan = laundryStore[day.dateStr] || { wash_user_1: 0, wash_user_2: 0 };
+				const dinners = dinnerStore[day.dateStr] || { 1: 0, 2: 0, 3: 0 };
+
+				const dayRow = document.createElement('div');
+				dayRow.className = `bg-white border border-slate-200 rounded-xl p-3 flex flex-col gap-2.5 transition-all shadow-sm ${day.isToday ? 'today-highlight shadow-blue-100/50' : ''}`;
+
+				const dayColor = day.dayName === '日' ? 'text-red-500' : day.dayName === '土' ? 'text-blue-500' : 'text-slate-500';
+
+				const isUser1Washing = plan.wash_user_1 >= 1;
+				const isUser2Washing = plan.wash_user_2 >= 1;
+
+				// 操作権限の判定（代理操作なし、本人のみ）
+				const canEditUser1Laundry = (currentUserId === 1);
+				const canEditUser2Laundry = (currentUserId === 2);
+
+				dayRow.innerHTML = `
+          <!-- 日付・曜日表示 -->
+          <div class="flex justify-between items-center border-b border-slate-100 pb-1.5">
+            <div class="flex items-center gap-2">
+              <span class="text-base font-bold text-slate-900">${day.dayNum}日</span>
+              <span class="text-xs font-medium ${dayColor}">(${day.dayName})</span>
+              ${day.isToday ? '<span class="bg-blue-600 text-white text-[10px] px-1.5 py-0.5 rounded font-bold tracking-wider">今日</span>' : ''}
+            </div>
           </div>
-        </div>
 
-        <div>
-          <span class="text-xs text-blue-700 font-medium block mb-1">後の予定（第2希望）</span>
-          <div class="grid grid-cols-3 gap-2" id="wash2-buttons">
-            <button onclick="setWash(2, 0)" id="w2-0" class="py-2 rounded-xl bg-white border border-slate-200 text-sm font-medium">なし</button>
-            <button onclick="setWash(2, 1)" id="w2-1" class="py-2 rounded-xl bg-white border border-slate-200 text-sm font-medium">自分</button>
-            <button onclick="setWash(2, 2)" id="w2-2" class="py-2 rounded-xl bg-white border border-slate-200 text-sm font-medium">母</button>
+          <!-- 各種操作ボタン -->
+          <div class="grid grid-cols-12 gap-2 items-center">
+            
+            <!-- 洗濯エリア (横幅6/12) -->
+            <div class="col-span-6 flex flex-col gap-1.5 border-r border-slate-100 pr-2">
+              
+              <!-- 自分 (ryo) の洗濯ボタン -->
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-xs font-semibold ${canEditUser1Laundry ? 'text-blue-600 font-bold' : 'text-slate-400'} w-7">
+                  ${canEditUser1Laundry ? '👉瞭' : '瞭'}
+                </span>
+                <div class="flex bg-slate-100 p-0.5 rounded-lg flex-1 ${canEditUser1Laundry ? 'ring-2 ring-blue-500/50' : ''}">
+                  <button onclick="${canEditUser1Laundry ? `setWash('${day.dateStr}', 1, 0)` : 'void(0)'}" 
+                          class="text-[11px] flex-1 py-1 rounded-md text-center transition-all ${!isUser1Washing ? 'bg-white text-slate-700 font-bold shadow-sm' : 'text-slate-400'}">
+                    無し
+                  </button>
+                  <button onclick="${canEditUser1Laundry ? `setWash('${day.dateStr}', 1, 1)` : 'void(0)'}" 
+                          class="text-[11px] flex-1 py-1 rounded-md text-center transition-all ${isUser1Washing ? 'bg-blue-600 text-white font-bold shadow-sm' : 'text-slate-600'}">
+                    洗濯
+                  </button>
+                </div>
+              </div>
+
+              <!-- 母 (haha) の洗濯ボタン -->
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-xs font-semibold ${canEditUser2Laundry ? 'text-indigo-600 font-bold' : 'text-slate-400'} w-7">
+                  ${canEditUser2Laundry ? '👉母' : '母'}
+                </span>
+                <div class="flex bg-slate-100 p-0.5 rounded-lg flex-1 ${canEditUser2Laundry ? 'ring-2 ring-indigo-500/50' : ''}">
+                  <button onclick="${canEditUser2Laundry ? `setWash('${day.dateStr}', 2, 0)` : 'void(0)'}" 
+                          class="text-[11px] flex-1 py-1 rounded-md text-center transition-all ${!isUser2Washing ? 'bg-white text-slate-700 font-bold shadow-sm' : 'text-slate-400'}">
+                    無し
+                  </button>
+                  <button onclick="${canEditUser2Laundry ? `setWash('${day.dateStr}', 2, 1)` : 'void(0)'}" 
+                          class="text-[11px] flex-1 py-1 rounded-md text-center transition-all ${isUser2Washing ? 'bg-indigo-600 text-white font-bold shadow-sm' : 'text-slate-600'}">
+                    洗濯
+                  </button>
+                </div>
+              </div>
+
+            </div>
+
+            <!-- 夜ごはんエリア (横幅6/12) -->
+            <div class="col-span-6 flex flex-col gap-1 pl-2">
+              <div class="text-[10px] text-slate-400 text-center font-bold mb-0.5">夜ごはん不要❌</div>
+              <div class="flex gap-1 justify-center">
+                ${[1, 2, 3].map(uid => {
+					const isNotNeeded = dinners[uid] === 1;
+					const canEditDinner = (currentUserId === uid);
+
+					// ボタンの基本色（他人のデータでもハッキリ見える濃い色）
+					const activeClass = isNotNeeded ? 'bg-red-500 text-white border-red-600' : 'bg-white text-slate-700 border-slate-200';
+					// 自分が押せるボタンだけ青い太枠をつける
+					const focusClass = canEditDinner ? 'ring-2 ring-blue-500 font-black scale-105 z-10' : 'opacity-90';
+
+					return `
+                    <button onclick="${canEditDinner ? `toggleDinner('${day.dateStr}', ${uid})` : 'void(0)'}" 
+                            class="text-[11px] flex-1 py-1.5 rounded-lg font-bold border transition-all text-center shadow-sm ${activeClass} ${focusClass}">
+                      ${uid === 1 ? '瞭' : uid === 2 ? '母' : '父'}
+                    </button>
+                  `;
+				}).join('')}
+              </div>
+            </div>
+
           </div>
-        </div>
+        `;
+				container.appendChild(dayRow);
+			});
+		}
 
-        <div class="flex items-center justify-between pt-2 border-t border-blue-100">
-          <span class="text-xs text-blue-700 font-medium">早オプション</span>
-          <input type="checkbox" id="option-early" onchange="toggleEarlyOption()" class="w-5 h-5 rounded border-slate-300 text-blue-600 focus:ring-blue-500">
-        </div>
-      </div>
-    </div>
+		// ==========================================
+		// 5. データ保存・更新処理 (UPSERT)
+		// ==========================================
+		async function setWash(dateStr, type, value) {
+			if (!isAuthenticated) return;
 
-    <!-- 夜ごはんカード -->
-    <div class="bg-emerald-50/50 border border-emerald-100 rounded-2xl p-4">
-      <h2 class="font-bold text-emerald-900 mb-3 flex items-center gap-2">🍳 夜ごはん不要フラグ</h2>
-      <p class="text-xs text-emerald-700 mb-3">タップすると「夜ごはん不要（赤）」に切り替わります</p>
-      
-      <div class="grid grid-cols-3 gap-2">
-        <button onclick="toggleDinner(1)" id="dinner-1" class="py-3 rounded-xl bg-white border border-slate-200 text-sm font-medium">自分</button>
-        <button onclick="toggleDinner(2)" id="dinner-2" class="py-3 rounded-xl bg-white border border-slate-200 text-sm font-medium">母</button>
-        <button onclick="toggleDinner(3)" id="dinner-3" class="py-3 rounded-xl bg-white border border-slate-200 text-sm font-medium">父</button>
-      </div>
-    </div>
+			if (!laundryStore[dateStr]) {
+				laundryStore[dateStr] = { date: dateStr, wash_user_1: 0, wash_user_2: 0, option_type: 0 };
+			}
 
-  </div>
+			if (type === 1) laundryStore[dateStr].wash_user_1 = value;
+			if (type === 2) laundryStore[dateStr].wash_user_2 = value;
 
-  <script>
-    // ==========================================
-    // 1. URLパラメータの取得
-    // ==========================================
-    const urlParams = new URLSearchParams(window.location.search);
-    const currentUserId = parseInt(urlParams.get('id'));
-    const secretKey = urlParams.get('key');
+			const p = laundryStore[dateStr];
 
-    const userNames = { 1: 'ryo(自分)', 2: 'haha(母)', 3: 'titi(父)' };
-    
-    // ★あなたのSupabase情報に書き換えてください！
-    const SUPABASE_URL = 'https://rszzwxwpgrovqsouvuyp.supabase.co';
-    const SUPABASE_KEY = 'sb_publishable_232TIVfWcH_TLDKQCxdFRw_Q4Ja3whI';
+			const { error } = await supabaseClient
+				.from('laundry_plans')
+				.upsert({
+					date: dateStr,
+					wash_user_1: p.wash_user_1,
+					wash_user_2: p.wash_user_2,
+					option_type: 0, // 使用しないので常に0
+					updated_by: currentUserId,
+					updated_at: new Date().toISOString()
+				});
 
-    // 通常の初期化（特殊なヘッダーは使わない）
-    const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+			if (error) alert("保存に失敗しました。");
+			else renderCalendar();
+		}
 
-    // データ保持用の一時変数
-    let currentLaundry = { wash_user_1: 0, wash_user_2: 0, option_type: 0 };
-    let currentDinners = { 1: 0, 2: 0, 3: 0 };
-    let isAuthenticated = false; // 認証フラグ
+		async function toggleDinner(dateStr, targetUserId) {
+			if (!isAuthenticated) return;
 
-    // 起動時にまず「身内チェック（認証）」を行う
-    window.addEventListener('DOMContentLoaded', checkUserAndLoad);
-    document.getElementById('date-select').addEventListener('change', loadData);
+			if (!dinnerStore[dateStr]) {
+				dinnerStore[dateStr] = { 1: 0, 2: 0, 3: 0 };
+			}
 
-    // ==========================================
-    // 2. 確実な身内チェック（認証）関数
-    // ==========================================
-    async function checkUserAndLoad() {
-      if (!currentUserId || !secretKey || !userNames[currentUserId]) {
-        accessDenied("URLの引数が正しくありません。");
-        return;
-      }
+			const currentVal = dinnerStore[dateStr][targetUserId];
+			const newVal = currentVal === 1 ? 0 : 1;
 
+			const { error } = await supabaseClient
+				.from('dinner_plans')
+				.upsert({
+					date: dateStr,
+					user_id: targetUserId,
+					not_needed: newVal,
+					updated_by: currentUserId,
+					updated_at: new Date().toISOString()
+				}, {
+					onConflict: 'date,user_id'
+				});
 
-		// 【デバッグ用】実際にプログラムが読み取っている値をアラートで確認します
-      alert(`デバッグ確認:\nURLのID: [${currentUserId}] (型: ${typeof currentUserId})\nURLのKey: [${secretKey}] (型: ${typeof secretKey})`);
-
-      // usersテーブルに、URLのidとkeyが一致するデータがあるか直接検索する
-      const { data: user, error } = await supabaseClient
-        .from('users')
-        .select('name')
-        .eq('id', currentUserId)
-        .eq('secret_key', secretKey)
-        .maybeSingle();
-
-      // 【デバッグ用】Supabaseからどんなエラーが返ってきているか確認します
-      if (error) {
-        alert(`Supabaseエラーが発生しました:\nコード: ${error.code}\nメッセージ: ${error.message}`);
-      }
-      
-      console.log("取得データ:", user); // 開発者ツールのコンソール用
-
-      if (error || !user) {
-        // 一致するユーザーがいなければアクセス拒否！
-        accessDenied("認証に失敗しました。IDまたはキーが間違っています。");
-        return;
-      }
-
-      // 認証成功！
-      isAuthenticated = true;
-      document.getElementById('user-badge').innerText = userNames[currentUserId];
-      
-      // 日付の初期化とデータ読み込み
-      initDateSelect();
-      await loadData();
-    }
-
-    function accessDenied(message) {
-      alert(message);
-      // 画面全体を「アクセス拒否」の表示に変えて操作できなくする
-      document.body.innerHTML = `<div class="p-8 text-center text-red-600 font-bold">${message}<br>正しいURLからアクセスし直してください。</div>`;
-    }
-
-    // 日付選択の初期化
-    function initDateSelect() {
-      const dateSelect = document.getElementById('date-select');
-      const today = new Date();
-      for (let i = 0; i < 7; i++) {
-        const d = new Date(today);
-        d.setDate(today.getDate() + i);
-        const yyyy = d.getFullYear();
-        const mm = String(d.getMonth() + 1).padStart(2, '0');
-        const dd = String(d.getDate()).padStart(2, '0');
-        const dateStr = `${yyyy}-${mm}-${dd}`;
-        
-        const option = document.createElement('option');
-        option.value = dateStr;
-        option.innerText = i === 0 ? `今日 (${mm}/${dd})` : i === 1 ? `明日 (${mm}/${dd})` : `${mm}/${dd}`;
-        dateSelect.appendChild(option);
-      }
-    }
-
-    // ==========================================
-    // 3. データ読み込み (SELECT)
-    // ==========================================
-    async function loadData() {
-      if (!isAuthenticated) return; // 認証されていなければ何もしない
-      
-      const selectedDate = document.getElementById('date-select').value;
-      if (!selectedDate) return;
-
-      // ① 洗濯データの取得
-      const { data: laundryData } = await supabaseClient
-        .from('laundry_plans')
-        .select('*')
-        .eq('date', selectedDate)
-        .maybeSingle();
-
-      currentLaundry = laundryData || { wash_user_1: 0, wash_user_2: 0, option_type: 0 };
-      updateLaundryUI();
-
-      // ② 夜ごはんデータの取得
-      const { data: dinnerData } = await supabaseClient
-        .from('dinner_plans')
-        .select('*')
-        .eq('date', selectedDate);
-
-      currentDinners = { 1: 0, 2: 0, 3: 0 }; 
-      if (dinnerData) {
-        dinnerData.forEach(row => {
-          currentDinners[row.user_id] = row.not_needed;
-        });
-      }
-      updateDinnerUI();
-    }
-
-    // ==========================================
-    // 4. UIの表示更新
-    // ==========================================
-    function updateLaundryUI() {
-      [0, 1, 2].forEach(v => {
-        const btn = document.getElementById(`w1-${v}`);
-        btn.className = "py-2 rounded-xl text-sm font-medium transition-all " + 
-          (currentLaundry.wash_user_1 === v ? "bg-blue-600 text-white shadow-sm font-bold border-blue-600" : "bg-white border border-slate-200 text-slate-700");
-      });
-      [0, 1, 2].forEach(v => {
-        const btn = document.getElementById(`w2-${v}`);
-        btn.className = "py-2 rounded-xl text-sm font-medium transition-all " + 
-          (currentLaundry.wash_user_2 === v ? "bg-indigo-600 text-white shadow-sm font-bold border-indigo-600" : "bg-white border border-slate-200 text-slate-700");
-      });
-      document.getElementById('option-early').checked = (currentLaundry.option_type === 1);
-    }
-
-    function updateDinnerUI() {
-      [1, 2, 3].forEach(uid => {
-        const btn = document.getElementById(`dinner-${uid}`);
-        const isNotNeeded = currentDinners[uid] === 1;
-        btn.className = "py-3 rounded-xl text-sm font-bold transition-all border " + 
-          (isNotNeeded ? "bg-red-500 text-white border-red-600 shadow-sm" : "bg-white text-slate-700 border-slate-200");
-        btn.innerText = (uid === 1 ? '自分' : uid === 2 ? '母' : '父') + (isNotNeeded ? '❌' : ' 🍚');
-      });
-    }
-
-    // ==========================================
-    // 5. データ保存・更新 (UPSERT)
-    // ==========================================
-    async function setWash(type, value) {
-      if (!isAuthenticated) return;
-      
-      if (type === 1) currentLaundry.wash_user_1 = value;
-      if (type === 2) currentLaundry.wash_user_2 = value;
-
-      const selectedDate = document.getElementById('date-select').value;
-
-      const { error } = await supabaseClient
-        .from('laundry_plans')
-        .upsert({
-          date: selectedDate,
-          wash_user_1: currentLaundry.wash_user_1,
-          wash_user_2: currentLaundry.wash_user_2,
-          option_type: currentLaundry.option_type,
-          updated_by: currentUserId,
-          updated_at: new Date().toISOString()
-        });
-
-      if (error) alert("保存に失敗しました。");
-      else updateLaundryUI();
-    }
-
-    async function toggleEarlyOption() {
-      currentLaundry.option_type = document.getElementById('option-early').checked ? 1 : 0;
-      setWash(0, 0); 
-    }
-
-    async function toggleDinner(targetUserId) {
-      if (!isAuthenticated) return;
-      
-      const newValue = currentDinners[targetUserId] === 1 ? 0 : 1;
-      const selectedDate = document.getElementById('date-select').value;
-
-      const { error } = await supabaseClient
-        .from('dinner_plans')
-        .upsert({
-          date: selectedDate,
-          user_id: targetUserId,
-          not_needed: newValue,
-          updated_by: currentUserId,
-          updated_at: new Date().toISOString()
-        }, {
-          onConflict: 'date,user_id'
-        });
-
-      if (error) alert("保存に失敗しました。");
-      else {
-        currentDinners[targetUserId] = newValue;
-        updateDinnerUI();
-      }
-    }
-  </script>
+			if (error) alert("保存に失敗しました。");
+			else {
+				dinnerStore[dateStr][targetUserId] = newVal;
+				renderCalendar();
+			}
+		}
+		// ==========================================
+		// 6. 今日の日付へスムーズスクロールする関数
+		// ==========================================
+		function scrollToToday() {
+			const todayEl = document.querySelector('.today-highlight');
+			if (todayEl) {
+				todayEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+			}
+		}
+	</script>
+	<!-- 画面右下に固定する「今日にジャンプ」ボタン -->
+	<button id="jump-to-today-btn" onclick="scrollToToday()"
+		class="fixed bottom-6 right-6 bg-blue-600 text-white font-bold p-3 rounded-full shadow-lg border border-blue-500 flex items-center justify-center gap-1 active:scale-95 transition-transform z-50">
+		<span>📅</span>
+		<span class="text-xs pr-1">今日へ</span>
+	</button>
 </body>
 </html>
