@@ -76,7 +76,7 @@
 		window.addEventListener('DOMContentLoaded', checkUserAndInit);
 
 		// ==========================================
-		// 2. 身内認証 & 3週間の日付生成
+		// 2. 身内認証 (修正版：直接selectせず関数で安全に照合)
 		// ==========================================
 		async function checkUserAndInit() {
 			if (!currentUserId || !secretKey || !userNames[currentUserId]) {
@@ -84,14 +84,27 @@
 				return;
 			}
 
-			const { data: user, error } = await supabaseClient
-				.from('users')
-				.select('name')
-				.eq('id', currentUserId)
-				.eq('secret_key', secretKey)
-				.maybeSingle();
+			// // ★ ここで 1 回だけセットすれば OK！
+			// // 以降の select / upsert / rpc すべてにヘッダーが乗ります	// ダメだった
+			// supabaseClient.rest.headers['x-secret-key'] = String(secretKey);
+			// // RLS用にヘッダーに x-secret-key を付与して初期化
+			// window.supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+			// 	global: {
+			// 		headers: {
+			// 			'x-secret-key': secretKey
+			// 		}
+			// 	}
+			// });
 
-			if (error || !user) {
+			// ★直接 select せず、安全なRPC関数を呼び出す
+			const { data, error } = await supabaseClient
+				.rpc('verify_user_credentials', {
+					p_user_id: currentUserId,
+					p_secret_key: secretKey
+				});
+
+			// レコードが返ってこない＝IDまたはキーが間違っている
+			if (error || !data || data.length === 0) {
 				accessDenied("認証に失敗しました。IDまたはキーが間違っています。");
 				return;
 			}
@@ -193,7 +206,7 @@
 				if (currentWeekGroup !== day.weekLabel) {
 					currentWeekGroup = day.weekLabel;
 					const sectionHeader = document.createElement('div');
-					sectionHeader.className = "text-xs font-bold text-slate-400 uppercase tracking-wider pl-2 pt-2 border-t border-slate-200 mt-4 first:mt-0 first:border-0";
+					sectionHeader.className = "text-base font-bold text-slate-500 uppercase tracking-wider pl-2 pt-3 border-t border-slate-200 mt-5 first:mt-0 first:border-0";
 					sectionHeader.innerText = `${day.weekLabel} (${day.monthStr})`;
 					container.appendChild(sectionHeader);
 				}
@@ -202,7 +215,7 @@
 				const dinners = dinnerStore[day.dateStr] || { 1: 0, 2: 0, 3: 0 };
 
 				const dayRow = document.createElement('div');
-				dayRow.className = `bg-white border border-slate-200 rounded-xl p-3 flex flex-col gap-2.5 transition-all shadow-sm ${day.isToday ? 'today-highlight shadow-blue-100/50' : ''}`;
+				dayRow.className = `bg-white border border-slate-200 rounded-xl p-3.5 flex flex-col gap-3 transition-all shadow-sm ${day.isToday ? 'today-highlight shadow-blue-100/50' : ''}`;
 
 				const dayColor = day.dayName === '日' ? 'text-red-500' : day.dayName === '土' ? 'text-blue-500' : 'text-slate-500';
 
@@ -215,11 +228,13 @@
 
 				dayRow.innerHTML = `
           <!-- 日付・曜日表示 -->
-          <div class="flex justify-between items-center border-b border-slate-100 pb-1.5">
+          <div class="flex justify-between items-center border-b border-slate-100 pb-2">
             <div class="flex items-center gap-2">
-              <span class="text-base font-bold text-slate-900">${day.dayNum}日</span>
-              <span class="text-xs font-medium ${dayColor}">(${day.dayName})</span>
-              ${day.isToday ? '<span class="bg-blue-600 text-white text-[10px] px-1.5 py-0.5 rounded font-bold tracking-wider">今日</span>' : ''}
+              <!-- 変更: 日付と曜日をドーンと大きく (text-base -> text-2xl / text-xs -> text-base) -->
+              <span class="text-2xl font-bold text-slate-900">${day.dayNum}日</span>
+              <span class="text-2xl font-bold ${dayColor}">(${day.dayName})</span>
+              <!-- 変更: 「今日」バッジも大きく (text-[10px] -> text-xs) -->
+              ${day.isToday ? '<span class="bg-blue-600 text-white text-xs px-2 py-0.5 rounded font-bold tracking-wider">今日</span>' : ''}
             </div>
           </div>
 
@@ -227,37 +242,37 @@
           <div class="grid grid-cols-12 gap-2 items-center">
             
             <!-- 洗濯エリア (横幅6/12) -->
-            <div class="col-span-6 flex flex-col gap-1.5 border-r border-slate-100 pr-2">
+            <div class="col-span-6 flex flex-col gap-2 border-r border-slate-100 pr-2">
               
               <!-- 自分 (ryo) の洗濯ボタン -->
-              <div class="flex items-center justify-between gap-2">
-                <span class="text-xs font-semibold ${canEditUser1Laundry ? 'text-blue-600 font-bold' : 'text-slate-400'} w-7">
+              <div class="flex items-center justify-between gap-1">
+                <span class="text-base font-bold ${canEditUser1Laundry ? 'text-blue-600' : 'text-slate-400'} w-8"> 
                   ${canEditUser1Laundry ? '👉瞭' : '瞭'}
                 </span>
                 <div class="flex bg-slate-100 p-0.5 rounded-lg flex-1 ${canEditUser1Laundry ? 'ring-2 ring-blue-500/50' : ''}">
                   <button onclick="${canEditUser1Laundry ? `setWash('${day.dateStr}', 1, 0)` : 'void(0)'}" 
-                          class="text-[11px] flex-1 py-1 rounded-md text-center transition-all ${!isUser1Washing ? 'bg-white text-slate-700 font-bold shadow-sm' : 'text-slate-400'}">
+                          class="text-base flex-1 py-1.5 rounded-md text-center transition-all ${!isUser1Washing ? 'bg-white text-slate-800 font-bold shadow-sm' : 'text-slate-400'}"> 
                     無し
                   </button>
                   <button onclick="${canEditUser1Laundry ? `setWash('${day.dateStr}', 1, 1)` : 'void(0)'}" 
-                          class="text-[11px] flex-1 py-1 rounded-md text-center transition-all ${isUser1Washing ? 'bg-blue-600 text-white font-bold shadow-sm' : 'text-slate-600'}">
+                          class="text-base flex-1 py-1.5 rounded-md text-center transition-all ${isUser1Washing ? 'bg-blue-600 text-white font-bold shadow-sm' : 'text-slate-600'}"> 
                     洗濯
                   </button>
                 </div>
               </div>
 
               <!-- 母 (haha) の洗濯ボタン -->
-              <div class="flex items-center justify-between gap-2">
-                <span class="text-xs font-semibold ${canEditUser2Laundry ? 'text-indigo-600 font-bold' : 'text-slate-400'} w-7">
+              <div class="flex items-center justify-between gap-1">
+                <span class="text-base font-bold ${canEditUser2Laundry ? 'text-indigo-600' : 'text-slate-400'} w-8"> 
                   ${canEditUser2Laundry ? '👉母' : '母'}
                 </span>
                 <div class="flex bg-slate-100 p-0.5 rounded-lg flex-1 ${canEditUser2Laundry ? 'ring-2 ring-indigo-500/50' : ''}">
                   <button onclick="${canEditUser2Laundry ? `setWash('${day.dateStr}', 2, 0)` : 'void(0)'}" 
-                          class="text-[11px] flex-1 py-1 rounded-md text-center transition-all ${!isUser2Washing ? 'bg-white text-slate-700 font-bold shadow-sm' : 'text-slate-400'}">
+                          class="text-base flex-1 py-1.5 rounded-md text-center transition-all ${!isUser2Washing ? 'bg-white text-slate-800 font-bold shadow-sm' : 'text-slate-400'}"> 
                     無し
                   </button>
                   <button onclick="${canEditUser2Laundry ? `setWash('${day.dateStr}', 2, 1)` : 'void(0)'}" 
-                          class="text-[11px] flex-1 py-1 rounded-md text-center transition-all ${isUser2Washing ? 'bg-indigo-600 text-white font-bold shadow-sm' : 'text-slate-600'}">
+                          class="text-base flex-1 py-1.5 rounded-md text-center transition-all ${isUser2Washing ? 'bg-fuchsia-600 text-white font-bold shadow-sm' : 'text-slate-600'}"> 
                     洗濯
                   </button>
                 </div>
@@ -267,7 +282,7 @@
 
             <!-- 夜ごはんエリア (横幅6/12) -->
             <div class="col-span-6 flex flex-col gap-1 pl-2">
-              <div class="text-[10px] text-slate-400 text-center font-bold mb-0.5">夜ごはん不要❌</div>
+              <div class="text-xs text-slate-500 text-center font-bold mb-0.5">夜ごはん不要❌</div> 
               <div class="flex gap-1 justify-center">
                 ${[1, 2, 3].map(uid => {
 					const isNotNeeded = dinners[uid] === 1;
@@ -280,7 +295,7 @@
 
 					return `
                     <button onclick="${canEditDinner ? `toggleDinner('${day.dateStr}', ${uid})` : 'void(0)'}" 
-                            class="text-[11px] flex-1 py-1.5 rounded-lg font-bold border transition-all text-center shadow-sm ${activeClass} ${focusClass}">
+                            class="text-base flex-1 py-2 rounded-lg font-bold border transition-all text-center shadow-sm ${activeClass} ${focusClass}"> 
                       ${uid === 1 ? '瞭' : uid === 2 ? '母' : '父'}
                     </button>
                   `;
@@ -297,31 +312,45 @@
 		// ==========================================
 		// 5. データ保存・更新処理 (UPSERT)
 		// ==========================================
+		// URLパラメータからいつでもキー付きのクライアントを作れるヘルパー関数
+		function getAuthenticatedClient() {
+			const urlParams = new URLSearchParams(window.location.search);
+			const key = urlParams.get('key') || secretKey || '';
+			return supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+				global: {
+					headers: {
+						'x-secret-key': String(key)
+					}
+				}
+			});
+		}
+
 		async function setWash(dateStr, type, value) {
 			if (!isAuthenticated) return;
 
-			if (!laundryStore[dateStr]) {
-				laundryStore[dateStr] = { date: dateStr, wash_user_1: 0, wash_user_2: 0, option_type: 0 };
-			}
+			const currentVal = laundryStore[dateStr] || { wash_user_1: 0, wash_user_2: 0 };
+			const nextW1 = type === 1 ? value : currentVal.wash_user_1;
+			const nextW2 = type === 2 ? value : currentVal.wash_user_2;
 
-			if (type === 1) laundryStore[dateStr].wash_user_1 = value;
-			if (type === 2) laundryStore[dateStr].wash_user_2 = value;
-
-			const p = laundryStore[dateStr];
-
-			const { error } = await supabaseClient
+			// ★ getAuthenticatedClient() を使って呼ぶ！
+			const { error } = await getAuthenticatedClient()
 				.from('laundry_plans')
 				.upsert({
 					date: dateStr,
-					wash_user_1: p.wash_user_1,
-					wash_user_2: p.wash_user_2,
-					option_type: 0, // 使用しないので常に0
-					updated_by: currentUserId,
+					wash_user_1: nextW1,
+					wash_user_2: nextW2,
+					option_type: 0,
+					updated_by: Number(currentUserId),
 					updated_at: new Date().toISOString()
-				});
+				}, { onConflict: 'date' });
 
-			if (error) alert("保存に失敗しました。");
-			else renderCalendar();
+			if (error) {
+				console.error("保存エラー詳細:", error);
+				alert("保存に失敗しました。");
+			} else {
+				laundryStore[dateStr] = { date: dateStr, wash_user_1: nextW1, wash_user_2: nextW2, option_type: 0 };
+				renderCalendar();
+			}
 		}
 
 		async function toggleDinner(dateStr, targetUserId) {
@@ -334,24 +363,26 @@
 			const currentVal = dinnerStore[dateStr][targetUserId];
 			const newVal = currentVal === 1 ? 0 : 1;
 
-			const { error } = await supabaseClient
+			// ★ getAuthenticatedClient() を使って呼ぶ！
+			const { error } = await getAuthenticatedClient()
 				.from('dinner_plans')
 				.upsert({
 					date: dateStr,
 					user_id: targetUserId,
 					not_needed: newVal,
-					updated_by: currentUserId,
+					updated_by: Number(currentUserId),
 					updated_at: new Date().toISOString()
-				}, {
-					onConflict: 'date,user_id'
-				});
+				}, { onConflict: 'date,user_id' });
 
-			if (error) alert("保存に失敗しました。");
-			else {
+			if (error) {
+				console.error("保存エラー詳細:", error);
+				alert("保存に失敗しました。");
+			} else {
 				dinnerStore[dateStr][targetUserId] = newVal;
 				renderCalendar();
 			}
 		}
+
 		// ==========================================
 		// 6. 今日の日付へスムーズスクロールする関数
 		// ==========================================
@@ -369,4 +400,5 @@
 		<span class="text-xs pr-1">今日へ</span>
 	</button>
 </body>
+
 </html>
