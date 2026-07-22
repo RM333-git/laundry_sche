@@ -49,7 +49,16 @@
 	<main class="max-w-md mx-auto px-2 pt-4">
 		<!-- カレンダーコンテナ -->
 		<div id="calendar-container" class="space-y-6">
-			<!-- ここに JavaScript で3週間分のカレンダーが生成されます -->
+			<!-- ここに JavaScript でカレンダーが生成されます -->
+		</div>
+
+		<!-- 隠し追加ボタン（最下部） -->
+		<div class="text-center mt-6 mb-8">
+			<button onclick="addNextWeek()"
+				class="text-xs text-slate-300 hover:text-blue-500 transition-colors duration-200 select-none cursor-pointer px-3 py-1 font-bold active:scale-90"
+				title="さらに次の週を表示">
+				↓
+			</button>
 		</div>
 	</main>
 
@@ -69,14 +78,15 @@
 		const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 		let isAuthenticated = false;
-		let datesArray = []; // 21日分の日付データ
+		let datesArray = []; // 日付データ配列
 		let laundryStore = {}; // 日付文字列 -> データ
 		let dinnerStore = {};  // 日付文字列 -> { user_id -> not_needed }
+		let isInitialLoad = true; // 初回読み込み判定フラグ
 
 		window.addEventListener('DOMContentLoaded', checkUserAndInit);
 
 		// ==========================================
-		// 2. 身内認証 (修正版：直接selectせず関数で安全に照合)
+		// 2. 身内認証
 		// ==========================================
 		async function checkUserAndInit() {
 			if (!currentUserId || !secretKey || !userNames[currentUserId]) {
@@ -96,14 +106,12 @@
 			// 	}
 			// });
 
-			// ★直接 select せず、安全なRPC関数を呼び出す
 			const { data, error } = await supabaseClient
 				.rpc('verify_user_credentials', {
 					p_user_id: currentUserId,
 					p_secret_key: secretKey
 				});
 
-			// レコードが返ってこない＝IDまたはキーが間違っている
 			if (error || !data || data.length === 0) {
 				accessDenied("認証に失敗しました。IDまたはキーが間違っています。");
 				return;
@@ -159,7 +167,7 @@
 		}
 
 		// ==========================================
-		// 3. データ一括取得 (SELECT)
+		// 3. データ取得 (SELECT)
 		// ==========================================
 		async function loadAllData() {
 			if (!isAuthenticated) return;
@@ -187,10 +195,67 @@
 
 			renderCalendar();
 
-			setTimeout(() => {
-				const todayEl = document.querySelector('.today-highlight');
-				if (todayEl) todayEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-			}, 300);
+			// 初回表示時のみ今日へスクロール
+			if (isInitialLoad) {
+				setTimeout(() => {
+					scrollToToday();
+					isInitialLoad = false;
+				}, 300);
+			}
+		}
+
+		// 隠し機能：さらに次の1週間分を追加読み込みする
+		async function addNextWeek() {
+			if (!isAuthenticated || datesArray.length === 0) return;
+
+			// 現在の配列の最後の日付を取得して翌日を作る
+			const lastDateParts = datesArray[datesArray.length - 1].dateStr.split('-');
+			const lastDate = new Date(lastDateParts[0], lastDateParts[1] - 1, lastDateParts[2]);
+
+			const dayNames = ['日', '月', '火', '水', '木', '金', '土'];
+			const newDates = [];
+
+			// 7日分生成
+			for (let i = 1; i <= 7; i++) {
+				const d = new Date(lastDate);
+				d.setDate(lastDate.getDate() + i);
+
+				const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+				const dateObj = {
+					dateStr,
+					monthStr: `${d.getMonth() + 1}月`,
+					dayNum: d.getDate(),
+					dayName: dayNames[d.getDay()],
+					isToday: false,
+					weekLabel: "再来週以降"
+				};
+
+				datesArray.push(dateObj);
+				newDates.push(dateStr);
+			}
+
+			// 新しく追加した7日分のデータのみを取得
+			const startDate = newDates[0];
+			const endDate = newDates[newDates.length - 1];
+
+			const [laundryRes, dinnerRes] = await Promise.all([
+				supabaseClient.from('laundry_plans').select('*').gte('date', startDate).lte('date', endDate),
+				supabaseClient.from('dinner_plans').select('*').gte('date', startDate).lte('date', endDate)
+			]);
+
+			if (laundryRes.data) {
+				laundryRes.data.forEach(row => { laundryStore[row.date] = row; });
+			}
+			if (dinnerRes.data) {
+				dinnerRes.data.forEach(row => {
+					if (!dinnerStore[row.date]) dinnerStore[row.date] = { 1: 0, 2: 0, 3: 0 };
+					dinnerStore[row.date][row.user_id] = row.not_needed;
+				});
+			}
+
+			// カレンダーを再描画
+			renderCalendar();
 		}
 
 		// ==========================================
@@ -230,10 +295,8 @@
           <!-- 日付・曜日表示 -->
           <div class="flex justify-between items-center border-b border-slate-100 pb-2">
             <div class="flex items-center gap-2">
-              <!-- 変更: 日付と曜日をドーンと大きく (text-base -> text-2xl / text-xs -> text-base) -->
               <span class="text-2xl font-bold text-slate-900">${day.dayNum}日</span>
               <span class="text-2xl font-bold ${dayColor}">(${day.dayName})</span>
-              <!-- 変更: 「今日」バッジも大きく (text-[10px] -> text-xs) -->
               ${day.isToday ? '<span class="bg-blue-600 text-white text-xs px-2 py-0.5 rounded font-bold tracking-wider">今日</span>' : ''}
             </div>
           </div>
@@ -288,9 +351,7 @@
 					const isNotNeeded = dinners[uid] === 1;
 					const canEditDinner = (currentUserId === uid);
 
-					// ボタンの基本色（他人のデータでもハッキリ見える濃い色）
 					const activeClass = isNotNeeded ? 'bg-red-500 text-white border-red-600' : 'bg-white text-slate-700 border-slate-200';
-					// 自分が押せるボタンだけ青い太枠をつける
 					const focusClass = canEditDinner ? 'ring-2 ring-blue-500 font-black scale-105 z-10' : 'opacity-90';
 
 					return `
@@ -393,6 +454,7 @@
 			}
 		}
 	</script>
+
 	<!-- 画面右下に固定する「今日にジャンプ」ボタン -->
 	<button id="jump-to-today-btn" onclick="scrollToToday()"
 		class="fixed bottom-6 right-6 bg-blue-600 text-white font-bold p-3 rounded-full shadow-lg border border-blue-500 flex items-center justify-center gap-1 active:scale-95 transition-transform z-50">
